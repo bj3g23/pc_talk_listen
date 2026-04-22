@@ -39,13 +39,14 @@ class OccupancyGridMap(object):
             # rospy.loginfo(rangeVal)
             for j in range(len(NoiseFunctionRanges)):
                 if round(NoiseFunctionRanges[j],2) == rangeVal:
-                    modifiedIntensity = point[3] - NoiseFunctionIntensities[i]
+                    modifiedIntensity = point[3] - (NoiseFunctionIntensities[i]*1.25)
                     if modifiedIntensity < 0:
                         modifiedIntensity = 0
                     break
             modifiedPoint = [point[0], point[1], point[2], modifiedIntensity]
             modifiedpc_array.append(modifiedPoint)
         return modifiedpc_array
+    
 
     def update(self, pc_array_msg):
         #initially, this assumes that the pointcloud is observed from the origin
@@ -80,13 +81,24 @@ class OccupancyGridMap(object):
         #normalisedIntensities = self.intensityNormaliser(self.rawIntensities)
         plt.imshow(self.rawIntensities, cmap='gray')
         plt.show()
-        plt.pause(1)
-        plt.close()
+
     
     def save(self, filename):
-        path = "src/pc_talk_listen/src/data/" + filename
+        rawFilename = filename+"Raw"
+        imageFilename = filename
+        avgImageFilename = filename+"Avg"
+        #save the raw intensities as a csv
+        pathfromIP_ws = "src/pc_talk_listen/src/data/"
+        path = pathfromIP_ws + rawFilename + ".csv"
         np.savetxt(path, self.rawIntensities, delimiter=',')
         rospy.loginfo("Raw intensities saved as "+path)
+        #save the sonar image as a png
+        plt.imsave(pathfromIP_ws+imageFilename+".png", self.rawIntensities, cmap='gray')
+        rospy.loginfo("Sonar image saved as "+pathfromIP_ws+imageFilename+".png")
+        #save the averaged sonar image as a png
+        averagedIntensities = self.spatial_average(6)
+        plt.imsave(pathfromIP_ws+avgImageFilename+".png", averagedIntensities, cmap='gray')
+        rospy.loginfo("Averaged sonar image saved as "+pathfromIP_ws+avgImageFilename+".png")
 
     def pc_msg_to_array(self, pointcloud_msg):
         pc_array = ros_numpy.point_cloud2.pointcloud2_to_array(pointcloud_msg)
@@ -206,10 +218,21 @@ class SelfNoiseFunction(object):
         result = np.array(temp2,dtype=[("range",np.float32),("noiseIntensity",np.float32)])
         return result
     
-    def show(self):
+    def smooth_data(self, data, averagingWindow):
+        # A function that takes in the output of integrate_collection and smooths the noiseIntensity by averaging over a sliding window of a given size
+        smoothedData = []
+        for i in range(len(data)):
+            rangeVal = data[i][0]
+            windowMin = max(0, i - int(averagingWindow/2))
+            windowMax = min(len(data)-1, i + int(averagingWindow/2))
+            windowVals = [data[j][1] for j in range(windowMin, windowMax+1)]
+            smoothedNoiseVal = np.mean(windowVals)            
+            smoothedData.append((rangeVal, smoothedNoiseVal))
+        return np.array(smoothedData, dtype=[("range",np.float32),("noiseIntensity",np.float32)])
+    
+    def show(self, data):
         # A blocking function that shows the self noise function
         #plt.close('all')
-        data = self.integrate_collection()
         y = data["noiseIntensity"]
         x = data["range"]
         plt.plot(x,y)
@@ -217,9 +240,11 @@ class SelfNoiseFunction(object):
     
     def save(self):
         data = self.integrate_collection()
-        np.savetxt("SelfNoiseFunction"+".csv", data, header="range,noiseIntensity")
+        self.show(data) # show the unaverage function
+        self.result = self.smooth_data(data, 5)
+        np.savetxt("SelfNoiseFunction"+".csv", self.result, header="range,noiseIntensity")
         rospy.loginfo("Saved SelfNoiseFunction")
-        self.show()
+        self.show(self.result) # show the smoothed function
 
     def load(self):
         NoiseFuncDtype = np.dtype([("range", np.float32), ("noiseIntensity", np.float32)])
@@ -236,36 +261,29 @@ def callbackSave(data, OGM):
     filename = time + "-" + descriptiveName +".csv"
     OGM.save(filename)'''
     descriptiveName = str(data.data)
-    filename = descriptiveName +".csv"
+    filename = descriptiveName
     OGM.save(filename)
-
-
-def callbackBinsList(data, argsList): # currently never called
-    #rospy.loginfo(argsList[1])
-    NoiseObj = argsList[0]
-    NoiseObj.range = argsList[1].range
-    NoiseObj.add_bins_to_collection(data.data)
-    time = int(rospy.get_time())
-    if time%10 == 0:
-        #NoiseObj.show()
-        pass
 
 def callbackChatter(data,OGM):  
     OGM.update(data)
-    # if rospy.get_rostime().secs%2 == 0:
-    #     OGM.show()
+    if rospy.get_rostime().secs%2==0 and OGM.selfNoiseState != 'w':
+        OGM.show()
+        time = rospy.get_rostime().secs
+        rospy.loginfo("Shown at time "+str(time))
 
 def callbackHeading(data, OGM):
-    if round(data.data,2) == round(data.data,1):
+    if round(data.data,3) == round(data.data,2) and OGM.selfNoiseState != 'w':
+        # only show the sonar image when the listener is not writing the self noise function
+        # this is because the writing process shows a plot of the self noise function, which interferes with the OGM plot
+        #rospy.loginfo("Shown")
         #OGM.show()
-        OGM.display()
         pass
     else:
         #rospy.loginfo(data.data)
         pass
 
 def listener():
-    OGM = OccupancyGridMap(3,3, selfNoiseState='w')
+    OGM = OccupancyGridMap(3,3, selfNoiseState='r')
     Noise = SelfNoiseFunction(100,3)
     rospy.init_node('listener', anonymous=True)
     rospy.Subscriber('save', String, callbackSave, OGM)

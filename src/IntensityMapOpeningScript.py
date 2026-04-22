@@ -8,11 +8,11 @@ def open():
     abspath = "data/" + filename + ".csv"
     print(abspath)
     rawIntensities = np.genfromtxt(abspath, delimiter=',')
-    OGM = OccupancyGridMap(5,5)
+    OGM = OccupancyGridMap(3,3)
     OGM.rawIntensities = rawIntensities
-    #OGM.display()
+    OGM.display() #blocking
     averagedIntensities = OGM.spatial_average(6)
-    averagedOGM = OccupancyGridMap(5,5)
+    averagedOGM = OccupancyGridMap(3,3)
     averagedOGM.rawIntensities = averagedIntensities
     averagedOGM.save("AverageTest")
     averagedOGM.display()
